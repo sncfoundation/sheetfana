@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sheetfana — Sheeternetes Dashboard</title>
+<style>
+  :root {
+    --surface-1: #1a1a19;   /* card surface */
+    --page:      #0d0d0d;   /* page plane  */
+    --text-1:    #ffffff;
+    --text-2:    #c3c2b7;
+    --muted:     #898781;
+    --grid:      #2c2c2a;
+    --baseline:  #383835;
+    --border:    rgba(255,255,255,0.10);
+    /* categorical / status (dark steps, validated) */
+    --series-1:  #3987e5;   /* blue  — replicas          */
+    --good:      #0ca30c;   /* Running                   */
+    --warning:   #fab219;   /* Pending                   */
+    --info:      #3987e5;   /* Scheduled                 */
+    --serious:   #ec835a;   /* Terminating               */
+    --critical:  #d03b3b;   /* Failed / Unknown          */
+    --neutral:   #6b6a64;   /* Deleted / other           */
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--page);
+    color: var(--text-1);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 14px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--series-1); }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 24px 20px 64px; }
+
+  header.top {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
+    margin-bottom: 20px;
+  }
+  header.top .brand { display: flex; align-items: center; gap: 10px; }
+  header.top .logo {
+    width: 30px; height: 30px; border-radius: 7px;
+    background: linear-gradient(135deg, var(--series-1), #1baf7a);
+    display: grid; place-items: center; font-weight: 700; color: #fff;
+  }
+  header.top h1 { font-size: 18px; margin: 0; font-weight: 650; letter-spacing: .2px; }
+  header.top .sub { color: var(--muted); font-size: 12px; margin-top: 1px; }
+  header.top .spacer { flex: 1; }
+  .status { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 7px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.ok  { background: var(--good); }
+  .dot.err { background: var(--critical); }
+
+  /* connection bar */
+  form.conn {
+    display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end;
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 12px; padding: 14px 16px; margin-bottom: 18px;
+  }
+  form.conn .field { display: flex; flex-direction: column; gap: 4px; }
+  form.conn .field.grow { flex: 1 1 340px; }
+  form.conn label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; }
+  form.conn input {
+    background: var(--page); border: 1px solid var(--baseline); color: var(--text-1);
+    border-radius: 8px; padding: 9px 11px; font-size: 13px; font-family: inherit; min-width: 0;
+  }
+  form.conn input:focus { outline: none; border-color: var(--series-1); }
+  form.conn button {
+    background: var(--series-1); color: #fff; border: none; border-radius: 8px;
+    padding: 10px 16px; font-size: 13px; font-weight: 600; cursor: pointer;
+  }
+  form.conn button.ghost { background: transparent; color: var(--text-2); border: 1px solid var(--baseline); }
+  form.conn button:hover { filter: brightness(1.08); }
+
+  .banner {
+    display: none; background: rgba(208,59,59,.12); border: 1px solid rgba(208,59,59,.5);
+    color: #f4b3b3; border-radius: 10px; padding: 11px 14px; margin-bottom: 16px; font-size: 13px;
+  }
+  .banner.show { display: block; }
+
+  /* stat tiles */
+  .tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 16px; }
+  @media (max-width: 720px) { .tiles { grid-template-columns: repeat(2, 1fr); } }
+  .tile {
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px;
+    padding: 16px 18px;
+  }
+  .tile .k { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; }
+  .tile .v { font-size: 34px; font-weight: 680; margin-top: 6px; line-height: 1; }
+  .tile .v small { font-size: 15px; color: var(--muted); font-weight: 500; }
+  .tile.accent .v { color: var(--good); }
+
+  /* panels */
+  .panels { display: grid; grid-template-columns: 1.5fr 1fr; gap: 14px; }
+  @media (max-width: 860px) { .panels { grid-template-columns: 1fr; } }
+  .panel {
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px;
+    padding: 16px 18px;
+  }
+  .panel h2 { font-size: 13px; font-weight: 620; margin: 0 0 14px; color: var(--text-2);
+    text-transform: uppercase; letter-spacing: .5px; }
+
+  /* replica bar chart */
+  .barrow { display: grid; grid-template-columns: 130px 1fr 34px; align-items: center; gap: 10px; margin: 9px 0; }
+  .barrow .name { font-size: 13px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .barrow .track { background: var(--grid); border-radius: 5px; height: 16px; overflow: hidden; }
+  .barrow .fill { height: 100%; background: var(--series-1); border-radius: 5px; min-width: 2px;
+    transition: width .4s ease; }
+  .barrow .num { font-size: 13px; text-align: right; font-variant-numeric: tabular-nums; color: var(--text-1); }
+  .empty { color: var(--muted); font-size: 13px; padding: 8px 0; }
+
+  /* pod phase */
+  .phasebar { display: flex; height: 22px; width: 100%; border-radius: 6px; overflow: hidden;
+    background: var(--grid); margin-bottom: 14px; }
+  .phasebar span { height: 100%; }
+  .legend { display: flex; flex-direction: column; gap: 8px; }
+  .legend .li { display: grid; grid-template-columns: 12px 1fr auto; align-items: center; gap: 9px; font-size: 13px; }
+  .legend .sw { width: 12px; height: 12px; border-radius: 3px; }
+  .legend .lbl { color: var(--text-2); }
+  .legend .cnt { font-variant-numeric: tabular-nums; color: var(--text-1); }
+
+  footer { color: var(--muted); font-size: 12px; margin-top: 26px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <div class="logo">S</div>
+      <div>
+        <h1>Sheetfana</h1>
+        <div class="sub">Sheeternetes cluster dashboard — our Grafana</div>
+      </div>
+    </div>
+    <div class="spacer"></div>
+    <div class="status"><span id="dot" class="dot"></span><span id="statusText">not connected</span></div>
+  </header>
+
+  <form class="conn" id="connForm" autocomplete="off">
+    <div class="field grow">
+      <label for="url">WEBAPP_URL (Apps Script /exec)</label>
+      <input id="url" type="url" placeholder="https://script.google.com/macros/s/XXXX/exec" spellcheck="false">
+    </div>
+    <div class="field grow">
+      <label for="token">TOKEN</label>
+      <input id="token" type="password" placeholder="your shared secret" spellcheck="false">
+    </div>
+    <div class="field">
+      <label>&nbsp;</label>
+      <button type="submit">Connect</button>
+    </div>
+    <div class="field">
+      <label>&nbsp;</label>
+      <button type="button" class="ghost" id="refreshBtn">Refresh</button>
+    </div>
+  </form>
+
+  <div class="banner" id="banner"></div>
+
+  <section class="tiles">
+    <div class="tile"><div class="k">Nodes</div><div class="v" id="mNodes">—</div></div>
+    <div class="tile accent"><div class="k">Ready</div><div class="v" id="mReady">—</div></div>
+    <div class="tile"><div class="k">Deployments</div><div class="v" id="mDeploys">—</div></div>
+    <div class="tile"><div class="k">Pods</div><div class="v" id="mPods">—</div></div>
+  </section>
+
+  <section class="panels">
+    <div class="panel">
+      <h2>Replicas per deployment</h2>
+      <div id="replicaChart"><div class="empty">No data yet.</div></div>
+    </div>
+    <div class="panel">
+      <h2>Pod phases</h2>
+      <div class="phasebar" id="phaseBar"></div>
+      <div class="legend" id="phaseLegend"><div class="empty">No data yet.</div></div>
+    </div>
+  </section>
+
+  <footer>
+    Auto-refreshes every 15s · Sheetfana, part of the Sheeternetes ecosystem ·
+    <a href="https://sncfoundation.github.io/" target="_blank" rel="noopener">SNC Foundation</a>
+  </footer>
+</div>
+
+<script>
+  "use strict";
+
+  var REFRESH_MS = 15000;
+  var PHASE_COLORS = {
+    Running:     getVar("--good"),
+    Pending:     getVar("--warning"),
+    Scheduled:   getVar("--info"),
+    Terminating: getVar("--serious"),
+    Failed:      getVar("--critical"),
+    Unknown:     getVar("--critical"),
+    Deleted:     getVar("--neutral")
+  };
+  var PHASE_ORDER = ["Running", "Scheduled", "Pending", "Terminating", "Failed", "Unknown", "Deleted"];
+
+  function getVar(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+  function $(id) { return document.getElementById(id); }
+
+  var urlInput = $("url"), tokenInput = $("token");
+  var timer = null;
+
+  // Restore saved config
+  try {
+    urlInput.value = localStorage.getItem("sheetfana.url") || "";
+    tokenInput.value = localStorage.getItem("sheetfana.token") || "";
+  } catch (e) { /* storage unavailable */ }
+
+  $("connForm").addEventListener("submit", function (e) {
+    e.preventDefault();
+    save();
+    start();
+  });
+  $("refreshBtn").addEventListener("click", function () { save(); load(); });
+
+  function save() {
+    try {
+      localStorage.setItem("sheetfana.url", urlInput.value.trim());
+      localStorage.setItem("sheetfana.token", tokenInput.value);
+    } catch (e) { /* ignore */ }
+  }
+
+  function setStatus(state, text) {
+    var dot = $("dot");
+    dot.className = "dot" + (state === "ok" ? " ok" : state === "err" ? " err" : "");
+    $("statusText").textContent = text;
+  }
+
+  function showError(msg) {
+    var b = $("banner");
+    b.textContent = msg;
+    b.classList.add("show");
+  }
+  function clearError() { $("banner").classList.remove("show"); }
+
+  function apiGet(kind) {
+    var base = urlInput.value.trim();
+    if (!base) return Promise.reject(new Error("Set WEBAPP_URL first."));
+    var sep = base.indexOf("?") === -1 ? "?" : "&";
+    var u = base + sep + "token=" + encodeURIComponent(tokenInput.value) + "&kind=" + encodeURIComponent(kind);
+    return fetch(u, { method: "GET", redirect: "follow" }).then(function (r) {
+      if (!r.ok) throw new Error(kind + ": HTTP " + r.status);
+      return r.json();
+    }).then(function (j) {
+      if (j && j.error) throw new Error(kind + ": " + j.error);
+      return (j && j.items) || [];
+    });
+  }
+
+  function load() {
+    var base = urlInput.value.trim();
+    if (!base) { setStatus("", "not connected"); return; }
+    setStatus("", "loading…");
+    Promise.all([apiGet("nodes"), apiGet("deployments"), apiGet("pods")])
+      .then(function (res) {
+        clearError();
+        render(res[0], res[1], res[2]);
+        setStatus("ok", "live · " + new Date().toLocaleTimeString());
+      })
+      .catch(function (err) {
+        setStatus("err", "error");
+        showError("Could not load from apiserver: " + err.message +
+          "  (Check the URL/token, and that the web app is deployed with access to Anyone.)");
+      });
+  }
+
+  function num(v) { var n = Number(v); return isFinite(n) ? n : 0; }
+
+  function render(nodes, deployments, pods) {
+    // stat tiles
+    var ready = nodes.filter(function (n) { return String(n.status) === "Ready"; }).length;
+    $("mNodes").textContent = nodes.length;
+    $("mReady").innerHTML = ready + " <small>/ " + nodes.length + "</small>";
+    $("mDeploys").textContent = deployments.length;
+    $("mPods").textContent = pods.length;
+
+    renderReplicas(deployments);
+    renderPhases(pods);
+  }
+
+  function renderReplicas(deployments) {
+    var el = $("replicaChart");
+    if (!deployments.length) { el.innerHTML = '<div class="empty">No deployments.</div>'; return; }
+    var max = deployments.reduce(function (m, d) { return Math.max(m, num(d.replicas)); }, 0) || 1;
+    var html = "";
+    deployments.forEach(function (d) {
+      var r = num(d.replicas);
+      var pct = Math.max(2, Math.round(r / max * 100));
+      html +=
+        '<div class="barrow">' +
+          '<div class="name" title="' + esc(d.name) + '">' + esc(d.name) + '</div>' +
+          '<div class="track"><div class="fill" style="width:' + pct + '%"></div></div>' +
+          '<div class="num">' + r + '</div>' +
+        '</div>';
+    });
+    el.innerHTML = html;
+  }
+
+  function renderPhases(pods) {
+    var bar = $("phaseBar"), legend = $("phaseLegend");
+    if (!pods.length) {
+      bar.innerHTML = "";
+      legend.innerHTML = '<div class="empty">No pods.</div>';
+      return;
+    }
+    var counts = {};
+    pods.forEach(function (p) {
+      var ph = String(p.phase || "Unknown");
+      counts[ph] = (counts[ph] || 0) + 1;
+    });
+    // stable order: known phases first, then any extras
+    var keys = PHASE_ORDER.filter(function (k) { return counts[k]; });
+    Object.keys(counts).forEach(function (k) { if (keys.indexOf(k) === -1) keys.push(k); });
+
+    var total = pods.length;
+    var barHtml = "", legHtml = "";
+    keys.forEach(function (k) {
+      var c = counts[k];
+      var color = PHASE_COLORS[k] || getVar("--neutral");
+      var pct = (c / total * 100).toFixed(2);
+      barHtml += '<span title="' + esc(k) + ': ' + c + '" style="width:' + pct + '%;background:' + color + '"></span>';
+      legHtml +=
+        '<div class="li">' +
+          '<span class="sw" style="background:' + color + '"></span>' +
+          '<span class="lbl">' + esc(k) + '</span>' +
+          '<span class="cnt">' + c + '</span>' +
+        '</div>';
+    });
+    bar.innerHTML = barHtml;
+    legend.innerHTML = legHtml;
+  }
+
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  function start() {
+    if (timer) clearInterval(timer);
+    load();
+    timer = setInterval(load, REFRESH_MS);
+  }
+
+  // Auto-start if we already have a saved URL
+  if (urlInput.value.trim()) start();
+</script>
+</body>
+</html>

@@ -1,0 +1,219 @@
+#!/usr/bin/env bash
+#
+# sheetfana — the dashboards layer for Sheeternetes. Our Grafana.
+# Reads the Sheeternetes apiserver (Apps Script web app) and renders dashboards:
+# a browser dashboard, an ASCII terminal dashboard, and an in-Sheet dashboard.
+#
+# Requires: bash, curl, jq. (`open` on macOS / `xdg-open` on Linux for `open`.)
+#
+# Config via env, or a .skctl.env / .sheetfana.env file next to this script:
+#   WEBAPP_URL=https://script.google.com/macros/s/XXXX/exec
+#   TOKEN=CHANGE_ME_super_secret
+#
+# Usage:
+#   sheetfana render     # ASCII terminal dashboard (nodes, deployments, pods)
+#   sheetfana open       # open dashboard.html in the browser
+#   sheetfana sheets     # print the Apps Script to paste into the Sheet
+#   sheetfana help
+#
+set -euo pipefail
+
+here="$(cd "$(dirname "$0")" && pwd)"
+# Load config: .sheetfana.env wins, else .skctl.env (shared with skctl).
+for envf in "$here/.sheetfana.env" "$here/.skctl.env"; do
+  [ -f "$envf" ] && . "$envf" && break
+done
+
+api_get() {
+  # $1 = kind (nodes|deployments|pods|events)
+  curl -fsSL -m 30 "${WEBAPP_URL}?token=${TOKEN}&kind=$1"
+}
+
+need() {
+  command -v "$1" >/dev/null 2>&1 || { echo "sheetfana: '$1' is required but not installed" >&2; exit 1; }
+}
+
+require_config() {
+  if [ -z "${WEBAPP_URL:-}" ]; then
+    echo "sheetfana: WEBAPP_URL is not set." >&2
+    echo "  export WEBAPP_URL=https://script.google.com/macros/s/XXXX/exec" >&2
+    echo "  export TOKEN=your_secret   (or put both in .skctl.env next to this script)" >&2
+    exit 1
+  fi
+  : "${TOKEN:=CHANGE_ME_super_secret}"
+}
+
+# ---------------------------------------------------------------------------
+# render — ASCII terminal dashboard
+# ---------------------------------------------------------------------------
+
+# Draw a horizontal bar of a given value against a max, width cols.
+bar() {
+  local val="$1" max="$2" width="${3:-24}"
+  local filled=0
+  if [ "$max" -gt 0 ]; then
+    filled=$(( val * width / max ))
+  fi
+  [ "$filled" -gt "$width" ] && filled="$width"
+  local i out=""
+  for ((i=0; i<filled; i++)); do out+="█"; done
+  for ((i=filled; i<width; i++)); do out+="·"; done
+  printf '%s' "$out"
+}
+
+cmd_render() {
+  need curl; need jq
+  require_config
+
+  local nodes deployments pods
+  if ! nodes="$(api_get nodes 2>/dev/null)"; then
+    echo "sheetfana: cannot reach apiserver at ${WEBAPP_URL}" >&2
+    # Fallback: if Sheetheus is present, at least show it exists.
+    if command -v sheetheus >/dev/null 2>&1; then
+      echo "sheetfana: apiserver unreachable; Sheetheus is installed but only stores metrics," >&2
+      echo "           not the resource inventory needed for this dashboard." >&2
+    fi
+    exit 1
+  fi
+  deployments="$(api_get deployments)"
+  pods="$(api_get pods)"
+
+  local n_total n_ready d_total p_total
+  n_total="$(jq '.items | length' <<<"$nodes")"
+  n_ready="$(jq '[.items[] | select(.status=="Ready")] | length' <<<"$nodes")"
+  d_total="$(jq '.items | length' <<<"$deployments")"
+  p_total="$(jq '.items | length' <<<"$pods")"
+
+  local reset bold dim green cyan yellow
+  if [ -t 1 ]; then
+    reset=$'\033[0m'; bold=$'\033[1m'; dim=$'\033[2m'
+    green=$'\033[32m'; cyan=$'\033[36m'; yellow=$'\033[33m'
+  else
+    reset=""; bold=""; dim=""; green=""; cyan=""; yellow=""
+  fi
+
+  echo
+  printf '%s┌─────────────────────────────────────────────────────────────┐%s\n' "$cyan" "$reset"
+  printf '%s│%s   %sSHEETFANA%s  ·  Sheeternetes cluster dashboard              %s│%s\n' "$cyan" "$reset" "$bold" "$reset" "$cyan" "$reset"
+  printf '%s└─────────────────────────────────────────────────────────────┘%s\n' "$cyan" "$reset"
+  printf '%s  %s%s\n\n' "$dim" "$(date '+%Y-%m-%d %H:%M:%S')  ${WEBAPP_URL}" "$reset"
+
+  # Stat tiles
+  printf '  %sNODES%s  %s%-4s%s   %sREADY%s  %s%-4s%s   %sDEPLOYMENTS%s  %s%-4s%s   %sPODS%s  %s%-4s%s\n\n' \
+    "$dim" "$reset" "$bold" "$n_total" "$reset" \
+    "$dim" "$reset" "$green$bold" "$n_ready" "$reset" \
+    "$dim" "$reset" "$bold" "$d_total" "$reset" \
+    "$dim" "$reset" "$bold" "$p_total" "$reset"
+
+  # Deployment / replica table with bar chart
+  printf '  %sReplicas per deployment%s\n' "$bold" "$reset"
+  local max_rep
+  max_rep="$(jq '[.items[].replicas | tonumber? // 0] | max // 1' <<<"$deployments")"
+  [ "$max_rep" -lt 1 ] && max_rep=1
+  # emit "name<TAB>replicas" then draw
+  while IFS=$'\t' read -r name rep; do
+    [ -z "$name" ] && continue
+    printf '    %s%-22s%s %s%s%s %s%s%s\n' \
+      "$reset" "$name" "$reset" \
+      "$cyan" "$(bar "$rep" "$max_rep" 24)" "$reset" \
+      "$bold" "$rep" "$reset"
+  done < <(jq -r '.items[] | [.name, (.replicas|tostring)] | @tsv' <<<"$deployments")
+  echo
+
+  # Pod phase breakdown
+  printf '  %sPod phases%s\n' "$bold" "$reset"
+  local phases
+  phases="$(jq -r '[.items[].phase] | group_by(.) | map({phase:.[0], n:length}) | .[] | [.phase, (.n|tostring)] | @tsv' <<<"$pods")"
+  if [ -z "$phases" ]; then
+    printf '    %s(no pods)%s\n' "$dim" "$reset"
+  else
+    while IFS=$'\t' read -r phase n; do
+      [ -z "$phase" ] && continue
+      local col="$reset"
+      case "$phase" in
+        Running)     col="$green" ;;
+        Pending|Scheduled) col="$yellow" ;;
+        Terminating|Deleted) col="$dim" ;;
+      esac
+      printf '    %s%-14s%s %s%s%s %s%s%s\n' \
+        "$col" "$phase" "$reset" \
+        "$col" "$(bar "$n" "$p_total" 24)" "$reset" \
+        "$bold" "$n" "$reset"
+    done <<<"$phases"
+  fi
+  echo
+
+  # Optional: Sheetheus metrics summary, if the TSDB is present.
+  if command -v sheetheus >/dev/null 2>&1; then
+    printf '  %sSheetheus (latest metrics)%s\n' "$bold" "$reset"
+    # `sheetheus export` prints JSONL: {ts,metric,labels,value}
+    if sheetheus export >/dev/null 2>&1; then
+      sheetheus export 2>/dev/null \
+        | jq -rs '
+            map(select(type=="object" and .metric))
+            | group_by(.metric)
+            | map(max_by(.ts))
+            | .[] | [.metric, (.value|tostring)] | @tsv' 2>/dev/null \
+        | while IFS=$'\t' read -r m v; do
+            [ -z "$m" ] && continue
+            printf '    %s%-28s%s %s%s%s\n' "$dim" "$m" "$reset" "$bold" "$v" "$reset"
+          done
+    else
+      printf '    %s(sheetheus present but export failed)%s\n' "$dim" "$reset"
+    fi
+    echo
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# open — open the browser dashboard
+# ---------------------------------------------------------------------------
+
+cmd_open() {
+  local html="$here/dashboard.html"
+  [ -f "$html" ] || { echo "sheetfana: $html not found" >&2; exit 1; }
+  local opener=""
+  if command -v open >/dev/null 2>&1; then opener="open"
+  elif command -v xdg-open >/dev/null 2>&1; then opener="xdg-open"
+  else
+    echo "sheetfana: no 'open' or 'xdg-open' found. Open this file manually:" >&2
+    echo "  $html" >&2
+    exit 1
+  fi
+  echo "sheetfana: opening $html"
+  "$opener" "$html"
+}
+
+# ---------------------------------------------------------------------------
+# sheets — print the Apps Script to paste into the spreadsheet
+# ---------------------------------------------------------------------------
+
+cmd_sheets() {
+  local gs="$here/Dashboard.gs"
+  if [ -f "$gs" ]; then
+    cat "$gs"
+  else
+    echo "sheetfana: Dashboard.gs not found next to this script" >&2
+    exit 1
+  fi
+  echo
+  echo "# ---" >&2
+  echo "# Paste the above into the Apps Script editor of your Sheeternetes" >&2
+  echo "# spreadsheet (Extensions -> Apps Script), then run buildDashboard()." >&2
+  echo "# It creates/refreshes a 'Dashboard' tab with counts and charts." >&2
+}
+
+# ---------------------------------------------------------------------------
+
+usage() {
+  grep '^#' "$0" | sed 's/^# \{0,1\}//'
+}
+
+cmd="${1:-help}"; shift || true
+case "$cmd" in
+  render) cmd_render ;;
+  open)   cmd_open ;;
+  sheets) cmd_sheets ;;
+  help|-h|--help) usage ;;
+  *) echo "sheetfana: unknown command '$cmd'" >&2; echo >&2; usage >&2; exit 1 ;;
+esac
