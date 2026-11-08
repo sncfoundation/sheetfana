@@ -21,6 +21,7 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 # Load config: .sheetfana.env wins, else .skctl.env (shared with skctl).
 for envf in "$here/.sheetfana.env" "$here/.skctl.env"; do
+  # shellcheck source=/dev/null
   [ -f "$envf" ] && . "$envf" && break
 done
 
