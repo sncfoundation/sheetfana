@@ -1,0 +1,24 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Shell syntax
+        run: bash -n sheetfana
+      - name: ShellCheck
+        run: shellcheck -S warning sheetfana
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+      - name: Apps Script syntax
+        run: node --check < Dashboard.gs
